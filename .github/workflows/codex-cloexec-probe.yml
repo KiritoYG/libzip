@@ -1,0 +1,24 @@
+name: Descriptor inheritance investigation
+on:
+  push:
+    branches: [codex/probe-fdopen-cloexec]
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure pinned-source library
+        run: >-
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+          -DBUILD_REGRESS=OFF -DBUILD_TOOLS=OFF -DBUILD_EXAMPLES=OFF
+          -DBUILD_DOC=OFF -DBUILD_OSSFUZZ=OFF
+          -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF
+          -DENABLE_OPENSSL=OFF -DENABLE_BZIP2=OFF
+          -DENABLE_LZMA=OFF -DENABLE_ZSTD=OFF
+      - name: Build actual library
+        run: cmake --build build --parallel 2
+      - name: Observe descriptor ownership and exec inheritance
+        run: python3 tools/codex-cloexec-probe.py --library build/lib/libzip.so --expect exposed

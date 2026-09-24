@@ -3,7 +3,7 @@
 # That is why we use version tags instead of commit hashes.
 
 name: Solaris
-on: [push]
+on: [workflow_dispatch]
 permissions:
   contents: read
 jobs:
