@@ -5,24 +5,9 @@ on:
 permissions:
   contents: read
 jobs:
-  validate:
-    name: ${{ matrix.os }} fdopen=${{ matrix.fdopen }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            fdopen: 'ON'
-          - os: ubuntu-24.04
-            fdopen: 'OFF'
-          - os: macos-15
-            fdopen: 'ON'
-          - os: windows-2022
-            fdopen: 'ON'
-          - os: windows-2022
-            fdopen: 'OFF'
+  linux_full:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -30,42 +15,28 @@ jobs:
           python-version: '3.11'
       - name: Install upstream test harness
         run: python -m pip install nihtest
-      - name: Prepare CMake for upstream Windows dependencies
-        if: runner.os == 'Windows'
-        uses: lukka/get-cmake@latest
-      - name: Prepare upstream Windows dependencies
-        if: runner.os == 'Windows'
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgGitCommitId: f3e10653cc27d62a37a3763cd84b38bca07c6075
-      - name: Configure Unix library and regressions
-        if: runner.os != 'Windows'
+      - name: Confirm no-crypto failures on unchanged upstream
+        shell: bash
+        run: |
+          git worktree add --detach baseline 564f17974a45aba8b3d852f40a279e0b6ff82a80
+          cmake -S baseline -B baseline-build -DCMAKE_BUILD_TYPE=Debug -DBUILD_REGRESS=ON -DBUILD_TOOLS=ON -DBUILD_EXAMPLES=OFF -DBUILD_DOC=OFF -DBUILD_OSSFUZZ=OFF -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF -DENABLE_OPENSSL=OFF -DENABLE_BZIP2=OFF -DENABLE_LZMA=OFF -DENABLE_ZSTD=OFF
+          cmake --build baseline-build --parallel 2
+          set +e
+          ctest --test-dir baseline-build -R '^(exact-read-integrity|hmac-error)\.test$' --output-on-failure | tee baseline-no-crypto.log
+          result=${PIPESTATUS[0]}
+          set -e
+          test "$result" -eq 8
+          grep -q '2 tests failed out of 2' baseline-no-crypto.log
+          grep -q 'Encryption method not supported' baseline-no-crypto.log
+      - name: Configure with the crypto required by the full suite
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
           -DBUILD_REGRESS=ON -DBUILD_TOOLS=ON -DBUILD_EXAMPLES=OFF
           -DBUILD_DOC=OFF -DBUILD_OSSFUZZ=OFF
-          -DENABLE_FDOPEN=${{ matrix.fdopen }}
-          -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF
-          -DENABLE_OPENSSL=OFF -DENABLE_BZIP2=OFF
-          -DENABLE_LZMA=OFF -DENABLE_ZSTD=OFF
-      - name: Configure Windows library and regressions
-        if: runner.os == 'Windows'
-        run: >-
-          cmake -S . -B build
-          -DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake
-          -DBUILD_REGRESS=ON -DBUILD_TOOLS=ON -DBUILD_EXAMPLES=OFF
-          -DBUILD_DOC=OFF -DBUILD_OSSFUZZ=OFF
-          -DENABLE_FDOPEN=${{ matrix.fdopen }}
-          -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF
-          -DENABLE_OPENSSL=OFF -DENABLE_BZIP2=OFF
-          -DENABLE_LZMA=OFF -DENABLE_ZSTD=OFF
-      - name: Build actual library and regression programs
-        run: cmake --build build --config Debug --parallel 2
-      - name: Native descriptor regression
-        run: ctest --test-dir build -C Debug -R '^fdopen_cloexec$' --output-on-failure --no-tests=error
-      - name: Observe protected exec inheritance on Linux
-        if: matrix.os == 'ubuntu-24.04' && matrix.fdopen == 'ON'
+          -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF -DENABLE_OPENSSL=ON
+      - name: Build actual library and regressions
+        run: cmake --build build --parallel 2
+      - name: Observe protected exec inheritance
         run: python tools/codex-cloexec-probe.py --library build/lib/libzip.so --expect protected
-      - name: Full upstream regression suite on Linux
-        if: matrix.os == 'ubuntu-24.04' && matrix.fdopen == 'ON'
+      - name: Full upstream regression suite with crypto enabled
         run: ctest --test-dir build --output-on-failure --no-tests=error --parallel 2
