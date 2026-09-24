@@ -5,31 +5,67 @@ on:
 permissions:
   contents: read
 jobs:
-  baseline:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+  validate:
+    name: ${{ matrix.os }} fdopen=${{ matrix.fdopen }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            fdopen: 'ON'
+          - os: ubuntu-24.04
+            fdopen: 'OFF'
+          - os: macos-15
+            fdopen: 'ON'
+          - os: windows-2022
+            fdopen: 'ON'
+          - os: windows-2022
+            fdopen: 'OFF'
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
       - name: Install upstream test harness
-        run: python3 -m pip install nihtest
-      - name: Configure pinned-source library
+        run: python -m pip install nihtest
+      - name: Prepare CMake for upstream Windows dependencies
+        if: runner.os == 'Windows'
+        uses: lukka/get-cmake@latest
+      - name: Prepare upstream Windows dependencies
+        if: runner.os == 'Windows'
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: f3e10653cc27d62a37a3763cd84b38bca07c6075
+      - name: Configure Unix library and regressions
+        if: runner.os != 'Windows'
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
           -DBUILD_REGRESS=ON -DBUILD_TOOLS=ON -DBUILD_EXAMPLES=OFF
           -DBUILD_DOC=OFF -DBUILD_OSSFUZZ=OFF
+          -DENABLE_FDOPEN=${{ matrix.fdopen }}
           -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF
           -DENABLE_OPENSSL=OFF -DENABLE_BZIP2=OFF
           -DENABLE_LZMA=OFF -DENABLE_ZSTD=OFF
-      - name: Build actual library
-        run: cmake --build build --parallel 2
-      - name: Observe descriptor ownership and exec inheritance
-        run: python3 tools/codex-cloexec-probe.py --library build/lib/libzip.so --expect exposed
-      - name: Verify native regression fails on unchanged production code
-        shell: bash
-        run: |
-          set +e
-          ctest --test-dir build -R '^fdopen_cloexec$' --output-on-failure | tee baseline-regression.log
-          result=${PIPESTATUS[0]}
-          set -e
-          test "$result" -eq 8
-          grep -q 'libzip-owned descriptor lacks FD_CLOEXEC' baseline-regression.log
+      - name: Configure Windows library and regressions
+        if: runner.os == 'Windows'
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake
+          -DBUILD_REGRESS=ON -DBUILD_TOOLS=ON -DBUILD_EXAMPLES=OFF
+          -DBUILD_DOC=OFF -DBUILD_OSSFUZZ=OFF
+          -DENABLE_FDOPEN=${{ matrix.fdopen }}
+          -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF
+          -DENABLE_OPENSSL=OFF -DENABLE_BZIP2=OFF
+          -DENABLE_LZMA=OFF -DENABLE_ZSTD=OFF
+      - name: Build actual library and regression programs
+        run: cmake --build build --config Debug --parallel 2
+      - name: Native descriptor regression
+        run: ctest --test-dir build -C Debug -R '^fdopen_cloexec$' --output-on-failure --no-tests=error
+      - name: Observe protected exec inheritance on Linux
+        if: matrix.os == 'ubuntu-24.04' && matrix.fdopen == 'ON'
+        run: python tools/codex-cloexec-probe.py --library build/lib/libzip.so --expect protected
+      - name: Full upstream regression suite on Linux
+        if: matrix.os == 'ubuntu-24.04' && matrix.fdopen == 'ON'
+        run: ctest --test-dir build --output-on-failure --no-tests=error --parallel 2
