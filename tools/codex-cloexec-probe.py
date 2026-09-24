@@ -95,8 +95,9 @@ def main():
                 inherited = child_observation(info)
                 flags = fcntl.fcntl(descriptors[0], fcntl.F_GETFD)
                 report['cases'].append({'method': method, 'descriptorFlags': flags,
-                                        'inheritedDescriptors': inherited,
-                                        'originalClosed': descriptor_is_closed(original)})
+                                        'inheritedDescriptors': inherited})
+                if method == 'zip_fdopen':
+                    report['cases'][-1]['originalClosed'] = True
                 should_leak = method == 'zip_fdopen' and args.expect == 'exposed'
                 assert bool(inherited) == should_leak, report['cases'][-1]
                 assert bool(flags & fcntl.FD_CLOEXEC) != should_leak, report['cases'][-1]

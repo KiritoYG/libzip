@@ -10,10 +10,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+      - name: Install upstream test harness
+        run: python3 -m pip install nihtest
       - name: Configure pinned-source library
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-          -DBUILD_REGRESS=OFF -DBUILD_TOOLS=OFF -DBUILD_EXAMPLES=OFF
+          -DBUILD_REGRESS=ON -DBUILD_TOOLS=ON -DBUILD_EXAMPLES=OFF
           -DBUILD_DOC=OFF -DBUILD_OSSFUZZ=OFF
           -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF
           -DENABLE_OPENSSL=OFF -DENABLE_BZIP2=OFF
@@ -22,3 +24,12 @@ jobs:
         run: cmake --build build --parallel 2
       - name: Observe descriptor ownership and exec inheritance
         run: python3 tools/codex-cloexec-probe.py --library build/lib/libzip.so --expect exposed
+      - name: Verify native regression fails on unchanged production code
+        shell: bash
+        run: |
+          set +e
+          ctest --test-dir build -R '^fdopen_cloexec$' --output-on-failure | tee baseline-regression.log
+          result=${PIPESTATUS[0]}
+          set -e
+          test "$result" -eq 8
+          grep -q 'libzip-owned descriptor lacks FD_CLOEXEC' baseline-regression.log
